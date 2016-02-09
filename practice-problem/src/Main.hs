@@ -56,11 +56,15 @@ findLines :: Matrix Double -> ([PaintCommand], Matrix Double)
 findLines mat = ([], mat)
 
 findSquares :: Matrix Double -> ([PaintCommand], Matrix Double)
-findSquares mat = ([], mat)
+findSquares mat = (cmds, mat - painted)
   where
     (noRows, noCols) = size mat
-    filterMat = matrix 3 $ take (noRows*noCols) $ repeat 1
+    filterMat = (3><3) [1..]
     result = conv2 mat filterMat
+    indexes = find (==9) result
+    cmds = map (\(r,c) -> PaintSquare r c 3) indexes
+    painted = sum (+) $ map toMat indexes
+
 
 calc :: Matrix Double -> [PaintCommand]
 calc mat = cmds1 ++ cmds2 ++ cmds3
