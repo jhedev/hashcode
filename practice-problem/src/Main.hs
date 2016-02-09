@@ -1,7 +1,7 @@
 module Main where
 
 import Debug.Trace
---import Data.Matrix hiding (trace)
+
 import Numeric.LinearAlgebra.Data
 import Numeric.LinearAlgebra.Devel
 import Numeric.LinearAlgebra.HMatrix
@@ -18,13 +18,11 @@ instance Show PaintCommand where
   show (EraseCell r c) = unwords ["ERASE_CELL", show r, show c]
 
 matrixFromString :: String -> Matrix Double
-matrixFromString str = matrix (read noCols) elems
+matrixFromString = fromLists . map (map toBool) . tail . lines
   where
-    (firstLine:ls) = lines str
-    [noRows, noCols] = words firstLine
-    elems = map toBool $ concat ls
     toBool '.' = 0
     toBool '#' = 1
+    toBool _   = error "Unexpected cell character!"
 
 fromFile :: FilePath -> IO (Matrix Double)
 fromFile fp = do
@@ -56,14 +54,44 @@ findLines :: Matrix Double -> ([PaintCommand], Matrix Double)
 findLines mat = ([], mat)
 
 findSquares :: Matrix Double -> ([PaintCommand], Matrix Double)
-findSquares mat = (cmds, mat - painted)
+findSquares mat =
+  let (_, mat', cmds) = removeSqs (firstSize, mat, [])
+  in (cmds, mat')
+  where
+    firstSize = floor $ (fromIntegral $ min (rows mat) (cols mat)) / 4
+
+removeSqs :: (Int, Matrix Double, [PaintCommand]) -> (Int, Matrix Double, [PaintCommand])
+removeSqs (filtSize, mat, cmds) =
+    case foundSquares of
+      ((row',col'):_) ->
+        let (row, col) = (row'+filtSize, col'+filtSize)
+            mat' = subtractSquare filtSize mat (row,col)
+        in removeSqs (filtSize, mat', PaintSquare row col filtSize:cmds)
+      _             ->
+        if filtSize > 0
+        then removeSqs (filtSize-1, mat, cmds)
+        else (0, mat, cmds)
   where
     (noRows, noCols) = size mat
-    filterMat = (3><3) [1..]
-    result = conv2 mat filterMat
-    indexes = find (==9) result
-    cmds = map (\(r,c) -> PaintSquare r c 3) indexes
-    painted = sum (+) $ map toMat indexes
+    filtLength = filtSize*2+1
+    filterMat = konst 1 (filtLength, filtLength)
+    result = corr2 filterMat mat
+    foundSquares = find (== (fromIntegral $ filtLength^2)) result
+
+subtractSquare :: Int -> Matrix Double -> (Int, Int) -> Matrix Double
+subtractSquare filtSize mat (row, col) =
+  mat - bigFilter
+  where
+    (noRows, noCols) = size mat
+    filtLength = filtSize*2+1
+    filterMat = konst 1 (filtLength, filtLength)
+    topPad = max 0 $ row - filtSize
+    bottomPad = max 0 $ (noRows-1) - (row+filtSize)
+    leftPad = max 0 $ col - filtSize
+    rightPad = max 0 $ (noCols-1) - (col+filtSize)
+    leftBlock = konst (0 :: Double) (topPad, leftPad)
+    rightBlock = konst (0 :: Double) (bottomPad, rightPad)
+    bigFilter = diagBlock [leftBlock, filterMat, rightBlock]
 
 
 calc :: Matrix Double -> [PaintCommand]
