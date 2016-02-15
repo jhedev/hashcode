@@ -134,18 +134,17 @@ loadForLoc' oId (prodId, n) = do
         success <- runCmd newCmd
         return (acc - prodWeight*numProds, newCmd:ls)
 
-loadForLoc :: OrderId -> (ProdId, Int) -> Simulation [DroneCommand]
-loadForLoc _   (_, 0) = return []
-loadForLoc oId (prodId, n) = do
-   loc <- (oLocation . fromJust . Map.lookup oId) <$> gets orders
+load :: Location -> (ProdId, Int) -> Simulation ()
+load _   (_, 0) = return ()
+load loc (prodId, n) = do
    prodWeight <- asks (fromJust . Map.lookup prodId . products)
    droneFreeSpaces <- getDroneSpace loc
    let totalWeight = prodWeight*n
    case droneFreeSpaces of
-     [] -> return []
+     [] -> return ()
      _  ->
        let (_, dnos) = foldl (getDroneDistrib prodWeight) (totalWeight, []) droneFreeSpaces in
-       fmap concat $ mapM loadDrone $ filter ((> 0) . snd) dnos
+       mapM_ loadDrone $ filter ((> 0) . snd) dnos
   where
     getDroneDistrib prodWeight (acc, ls) (dId, freeSpace) =
       if acc <= 0
@@ -160,15 +159,13 @@ loadForLoc oId (prodId, n) = do
     loadDrone (dId, numProds) = do
       dLoc <- dLocation . fromJust . Map.lookup dId <$> gets drones
       updateDrone dId prodId numProds
-      loc <- (oLocation . fromJust . Map.lookup oId) <$> gets orders
       whIds <- getWareHouses loc dLoc prodId
       let (_, whs) = foldl getWHDistrib (numProds, []) whIds
       mapM (loadDroneFromWh dId) whs
     loadDroneFromWh dId (whId, numProds) = do
       updateWareHouse whId prodId numProds
       let newCmd = DroneCommand dId $ Load whId prodId numProds
-      success <- runCmd newCmd
-      return newCmd
+      void $ runCmd newCmd
 
 deliver :: OrderId -> (DroneId, Drone) -> Simulation ()
 deliver oid (dId, d) = do
@@ -178,10 +175,8 @@ deliver oid (dId, d) = do
 
 handleOrder :: (OrderId, Order) -> Simulation ()
 handleOrder (oId, o) = do
-  let oLoc = oLocation o
-  lCmds <- mapM (loadForLoc oId) $ Map.toList $ oProducts o
-  dCmds <- get >>= mapM (deliver oId) . Map.toList . drones
-  return ()
+  mapM_ (load (oLocation o)) $ Map.toList $ oProducts o
+  get >>= mapM_ (deliver oId) . Map.toList . drones
 
 releaseTheDrones :: Simulation ()
 releaseTheDrones = gets orders >>= mapM_ handleOrder . sortOn (oTotalNum . snd) . Map.toList
