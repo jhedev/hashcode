@@ -23,7 +23,8 @@ dist (a,b) (c,d) = ceiling $ sqrt $ fromIntegral $ (a - c)^2 + (b - d)^2
 --represents where the drone is "at the moment" i.e. end of its last cmd
 data Drone = Drone
   { dLocation :: Location
-  , lastCommand :: (Int, DroneCommand)
+  , dTurnFree :: Int
+  , dLastCmd  :: DroneCommand
   , dProducts :: Map ProdId Int
   } deriving Show
 
@@ -37,10 +38,21 @@ data Order = Order
   , oProducts :: Map Int Int
   } deriving Show
 
-data DroneCommand = Load DroneId WareHouseId ProdId Int
-                  | Unload DroneId WareHouseId ProdId Int
-                  | Deliver DroneId OrderId ProdId Int
-                  | Wait DroneId Int
+data DroneCommand' = Load WareHouseId ProdId Int
+                  | Unload WareHouseId ProdId Int
+                  | Deliver OrderId ProdId Int
+                  | Wait Int
+
+instance Show DroneCommand' where
+  show (Load w p i) = unwords ["L", show w, show p, show i]
+  show (Unload w p i) = unwords ["U", show w, show p, show i]
+  show (Deliver o p i) = unwords ["D", show o, show p, show i]
+  show (Wait i) = unwords ["W", show i]
+
+data DroneCommand = DroneCommand DroneId DroneCommand'
+
+instance Show DroneCommand where
+  show (DroneCommand dId cmd) = unwords [show dId, show cmd]
 
 data SimConfig = SimConfig
    { rows :: Int
@@ -61,30 +73,28 @@ data SimState = SimState
 type Simulation = RWS SimConfig [DroneCommand] SimState
 
 cmdTime :: DroneCommand -> Simulation (DroneId, Location, Int)
-cmdTime (Load dId wId _ _) = do
-  drone <- gets drones >>= return . fromJust . Map.lookup dId
-  wLoc <- gets warehouses >>= return . wLocation . fromJust . Map.lookup wId
-  return . (dId,wLoc,) $ dist wLoc (dLocation drone) + 1
-cmdTime (Unload dId wId _ _) = do
-  drone <- gets drones >>= return . fromJust . Map.lookup dId
-  wLoc <- gets warehouses >>= return . wLocation . fromJust . Map.lookup wId
-  return . (dId,wLoc,)$ dist wLoc (dLocation drone) + 1
-cmdTime (Deliver dId oId _ _) = do
-  drone <- gets drones >>= return . fromJust . Map.lookup dId
-  oLoc <- gets orders >>= return . oLocation . fromJust . Map.lookup oId
-  return . (dId,oLoc,)$ dist oLoc (dLocation drone) + 1
-cmdTime (Wait dId i) = do
-  drone <- gets drones >>= return . fromJust . Map.lookup dId
-  return (dId, dLocation drone, i)
- 
+cmdTime (DroneCommand dId cmd) = do
+  drone <- fromJust . Map.lookup dId <$> gets drones
+  case cmd of
+    (Load wId _ _) -> do
+      wLoc <- wLocation . fromJust . Map.lookup wId <$> gets warehouses
+      return . (dId,wLoc,) $ dist wLoc (dLocation drone) + 1
+    (Unload wId _ _) -> do
+      wLoc <- wLocation . fromJust . Map.lookup wId <$> gets warehouses
+      return . (dId,wLoc,)$ dist wLoc (dLocation drone) + 1
+    (Deliver oId _ _) -> do
+      oLoc <- oLocation . fromJust . Map.lookup oId <$> gets orders
+      return . (dId,oLoc,)$ dist oLoc (dLocation drone) + 1
+    (Wait i) -> return (dId, dLocation drone, i)
+
 --Command agnostic functions
 applyCmd :: DroneCommand -> Simulation Int
 applyCmd newCmd = do
   (dId, newLoc, finishTime) <- cmdTime newCmd
-  drone <- gets drones >>= return . fromJust . Map.lookup dId
-  let currentTime = fst . lastCommand $ drone
-  let newDrone = Drone newLoc (finishTime+currentTime, newCmd) (dProducts drone)
-  ds' <- gets drones >>= return . Map.insert dId newDrone
+  drone <- fromJust . Map.lookup dId <$> gets drones
+  let currentTime = dTurnFree drone
+  let newDrone = Drone newLoc (finishTime+currentTime) newCmd (dProducts drone)
+  ds' <- Map.insert dId newDrone <$> gets drones
   modify (\sim -> sim {drones = ds'})
   return $ finishTime+currentTime
 
@@ -99,8 +109,3 @@ runCmd newCmd = do
     else return False
  ---
 
-instance Show DroneCommand where
-  show (Load d w p i) = unwords [show d, "L", show w, show p, show i]
-  show (Unload d w p i) = unwords [show d, "U", show w, show p, show i]
-  show (Deliver d o p i) = unwords [show d, "D", show o, show p, show i]
-  show (Wait d i) = unwords [show d, "W", show i]

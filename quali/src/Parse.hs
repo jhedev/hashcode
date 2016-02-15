@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 module Parse (parseSimulation) where
 
 import Data.Maybe (fromJust)
@@ -43,5 +44,5 @@ parseSimulation str =
     warehouses = Map.fromList $ zip [0..] $ parseWarehouses $ take (2 * (read noWarehouses)) ls
     orders = Map.fromList $ zip [0..] $ parseOrders $ drop (2*(read noWarehouses) +1 ) ls
     firstWh = wLocation $ fromJust $ Map.lookup 0 warehouses
-    newDrone = Drone firstWh (0, Wait 0 0) Map.empty
-    ds = Map.fromList $ zip [0..(read drones)-1] (repeat newDrone)
+    newDrone i = (i, Drone firstWh 0 (DroneCommand i $ Wait 0) Map.empty)
+    ds = Map.fromList $ map newDrone [0..(read drones)-1]
