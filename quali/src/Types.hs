@@ -65,8 +65,7 @@ data SimConfig = SimConfig
    } deriving Show
 
 data SimState = SimState
-  { currTurn :: Int
-  , warehouses :: Map WareHouseId WareHouse
+  { warehouses :: Map WareHouseId WareHouse
   , orders :: Map OrderId Order
   , drones :: Map DroneId Drone
   } deriving Show
@@ -76,37 +75,33 @@ type Simulation = RWS SimConfig [DroneCommand] SimState
 cmdTime :: DroneCommand -> Simulation (DroneId, Location, Int)
 cmdTime (DroneCommand dId cmd) = do
   drone <- fromJust . Map.lookup dId <$> gets drones
+  let currentTime = dTurnFree drone
   case cmd of
     (Load wId _ _) -> do
       wLoc <- wLocation . fromJust . Map.lookup wId <$> gets warehouses
-      return . (dId,wLoc,) $ dist wLoc (dLocation drone) + 1
+      return . (dId,wLoc,) $ dist wLoc (dLocation drone) + 1 + currentTime
     (Unload wId _ _) -> do
       wLoc <- wLocation . fromJust . Map.lookup wId <$> gets warehouses
-      return . (dId,wLoc,)$ dist wLoc (dLocation drone) + 1
+      return . (dId,wLoc,) $ dist wLoc (dLocation drone) + 1 + currentTime
     (Deliver oId _ _) -> do
       oLoc <- oLocation . fromJust . Map.lookup oId <$> gets orders
-      return . (dId,oLoc,)$ dist oLoc (dLocation drone) + 1
-    (Wait i) -> return (dId, dLocation drone, i)
+      return . (dId,oLoc,) $ dist oLoc (dLocation drone) + 1 + currentTime
+    (Wait i) -> return (dId, dLocation drone, i + currentTime)
 
 --Command agnostic functions
 applyCmd :: DroneCommand -> Simulation Int
 applyCmd newCmd = do
   (dId, newLoc, finishTime) <- cmdTime newCmd
   drone <- fromJust . Map.lookup dId <$> gets drones
-  let currentTime = dTurnFree drone
-  let newDrone = Drone newLoc (finishTime+currentTime) newCmd (dProducts drone)
-  ds' <- Map.insert dId newDrone <$> gets drones
-  modify (\sim -> sim {drones = ds'})
-  return $ finishTime+currentTime
+  let newDrone = Drone newLoc finishTime newCmd (dProducts drone)
+      addDrone = Map.insert dId newDrone
+  modify (\sim -> sim {drones = addDrone (drones sim)})
+  return finishTime
 
 runCmd :: DroneCommand -> Simulation Bool
 runCmd newCmd = do
   newTurn <- applyCmd newCmd
-  latestNow <- gets currTurn
   deadln <- asks deadline
-  modify (\sim -> sim {currTurn = max latestNow newTurn})
   if newTurn <= deadln
     then tell [newCmd] >> return True
     else return False
- ---
-

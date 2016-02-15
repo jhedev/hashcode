@@ -36,7 +36,7 @@ parseSimulation :: String -> (SimConfig, SimState)
 parseSimulation str =
   (SimConfig (read rows) (read cols) (read drones)
             (read deadline) (read sizeOfDrones) prods
-  , SimState 0 warehouses orders ds)
+  ,SimState warehouses orders ds)
   where
     (l:noProds:prodTypes:noWarehouses:ls) = lines str
     [rows, cols, drones, deadline, sizeOfDrones] = words l

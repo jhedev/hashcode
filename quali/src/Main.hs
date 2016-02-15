@@ -42,13 +42,17 @@ prodsToWeight d = do
     f :: Map ProdId Weight -> (ProdId, Int) -> Int
     f ps (pid, no) = fromJust (Map.lookup pid ps) * no
 
-getDroneSpace :: Simulation [(DroneId, Int)]
-getDroneSpace = do
+getDroneSpace :: Location -> Simulation [(DroneId, Int)]
+getDroneSpace oLoc = do
   maxSize <- asks sizeDrone
   drones <- gets drones
   droneWeights <- mapM prodsToWeight drones
   let spaces = getFit maxSize <$> Map.toList droneWeights
-  return $ sortOn (\(dId, space) -> dTurnFree . fromJust $ Map.lookup dId drones) spaces
+  let sorter (dId, space) =
+        let freeTurn = dTurnFree . fromJust $ Map.lookup dId drones
+            dLoc     = dLocation . fromJust $ Map.lookup dId drones
+        in dLoc `dist` oLoc + freeTurn
+  return $ sortOn sorter spaces
   where
     getFit maxSize (dId, w) = (dId, maxSize - w)
 
@@ -64,7 +68,7 @@ getWareHouses loc1 loc2 prodId = do
   where
     getProdInfo prodId (whId, wh) = do -- Maybe monad
       numLeft <- Map.lookup prodId (wProducts wh)
-      let distFromLoc = dist loc1 (wLocation wh) + dist loc2 (wLocation wh)
+      let distFromLoc = (loc1 `dist` wLocation wh) + (loc2 `dist` wLocation wh)
       return (whId, numLeft, distFromLoc)
 
 -- Destock or stock a warehouse
@@ -135,7 +139,7 @@ loadForLoc _   (_, 0) = return []
 loadForLoc oId (prodId, n) = do
    loc <- (oLocation . fromJust . Map.lookup oId) <$> gets orders
    prodWeight <- asks (fromJust . Map.lookup prodId . products)
-   droneFreeSpaces <- getDroneSpace
+   droneFreeSpaces <- getDroneSpace loc
    let totalWeight = prodWeight*n
    case droneFreeSpaces of
      [] -> return []
@@ -161,13 +165,10 @@ loadForLoc oId (prodId, n) = do
       let (_, whs) = foldl getWHDistrib (numProds, []) whIds
       mapM (loadDroneFromWh dId) whs
     loadDroneFromWh dId (whId, numProds) = do
-       updateWareHouse whId prodId numProds
-       let newCmd = DroneCommand dId $ Load whId prodId numProds
-       success <- runCmd newCmd
-       return newCmd
-   -- here one might consider not greedily loading every done full
-   -- for example if we want to use Unload
-   -- also we could find the warehouse and drone at the same time
+      updateWareHouse whId prodId numProds
+      let newCmd = DroneCommand dId $ Load whId prodId numProds
+      success <- runCmd newCmd
+      return newCmd
 
 deliver :: OrderId -> (DroneId, Drone) -> Simulation ()
 deliver oid (dId, d) = do
