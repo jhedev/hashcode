@@ -14,6 +14,24 @@ import System.Environment
 import Types
 import Parse
 
+getCmdCost :: OrderId -> DroneId -> WareHouseId -> Simulation Int
+getCmdCost oId dId whId = do
+  oLoc <- gets (oLocation . fromJust . Map.lookup oId . orders)
+  wLoc <- gets (wLocation . fromJust . Map.lookup whId . warehouses)
+  drone <- gets (fromJust . Map.lookup dId . drones)
+  return $ ((oLoc `dist` wLoc) + (wLoc `dist` dLocation drone)) + dTurnFree drone
+
+getBestCombos :: OrderId
+              -> ProdId
+              -> Simulation [(Int, (DroneId, WareHouseId))]
+getBestCombos oId prodId = do
+  possibleWhs <- fmap (\(_, _, z) -> z) <$> getWareHouses (0, 0) (0, 0) prodId
+  droneIds <- Map.keys <$> gets drones
+  let combos = concatMap (\d -> map (d,) possibleWhs) droneIds
+  let g t@(dId, whId) = fmap (,t) $ getCmdCost oId dId whId
+  ratedCombos <- mapM g combos
+  return $ sortOn fst ratedCombos
+
 
 prodsToWeight :: Drone -> Simulation Weight
 prodsToWeight d = do
@@ -24,34 +42,30 @@ prodsToWeight d = do
     f :: Map ProdId Weight -> (ProdId, Int) -> Int
     f ps (pid, no) = fromJust (Map.lookup pid ps) * no
 
-
 getDroneSpace :: Simulation [(DroneId, Int)]
 getDroneSpace = do
   maxSize <- asks sizeDrone
   drones <- gets drones
   droneWeights <- mapM prodsToWeight drones
-  let spaces = fmap (getFit maxSize) $ Map.toList droneWeights
+  let spaces = getFit maxSize <$> Map.toList droneWeights
   return $ sortOn (\(dId, space) -> dTurnFree . fromJust $ Map.lookup dId drones) spaces
   where
     getFit maxSize (dId, w) = (dId, maxSize - w)
 
--- Get "best" warehouse from location and product id
-getWareHouses :: Location -> ProdId -> Simulation [(WareHouseId, Int, Int)]
-getWareHouses loc prodId = do
+-- Get "best" warehouse from drone location and order location and product id
+getWareHouses :: Location -> Location -> ProdId -> Simulation [(WareHouseId, Int, Int)]--  [(WareHouseId, Int, Int)]
+getWareHouses loc1 loc2 prodId = do
     whs <- gets warehouses
-    let validWarehouses = mapMaybe (lookupProd prodId) $ Map.toList whs
+    let validWarehouses = mapMaybe (getProdInfo prodId) $ Map.toList whs
     case validWarehouses of
       [] -> get >>= error . ("Item missing from warehouse!" ++). show
-      _  -> return validWarehouses
-      --_  -> return . fst $ minimumDist validWarehouses
+      _  -> return $ sortOn (\(whId, numLeft, whDist) -> whDist) validWarehouses
+       --_  -> return validWarehouses
   where
-    lookupProd prodid (whId, wh) =
-      Map.lookup prodid (wProducts wh)
-      >>= \numLeft -> (return . (whId,numLeft,) . dist loc . wLocation) wh
-    minimumDist [] = maxBound
-    minimumDist ((whId, wDist):ws) =
-      let (whId', wDist') = minimumDist ws
-      in if wDist' < wDist then (whId', wDist') else (whId, wDist)
+    getProdInfo prodId (whId, wh) = do -- Maybe monad
+      numLeft <- Map.lookup prodId (wProducts wh)
+      let distFromLoc = dist loc1 (wLocation wh) + dist loc2 (wLocation wh)
+      return (whId, numLeft, distFromLoc)
 
 -- Destock or stock a warehouse
 updateWareHouse :: WareHouseId -> ProdId -> Int -> Simulation ()
@@ -85,9 +99,41 @@ clearDrones = do
   let ds' = Map.map (\d -> d {dProducts = Map.empty}) ds
   modify (\sim -> sim { drones = ds'})
 
-loadForLoc :: Location -> (ProdId, Int) -> Simulation [DroneCommand]
+loadForLoc' :: OrderId -> (ProdId, Int) -> Simulation [DroneCommand]
+loadForLoc' _   (_, 0) = return []
+loadForLoc' oId (prodId, n) = do
+   prodWeight <- asks (fromJust . Map.lookup prodId . products)
+   combos <- fmap (map snd) $ getBestCombos oId prodId
+   let totalWeight = prodWeight*n
+   case combos of
+     [] -> return []
+     _  -> do
+       (_, loads) <- foldM (getDroneDistrib prodWeight) (totalWeight, []) combos
+       return loads
+  where
+    getDroneDistrib prodWeight (acc, ls) (dId, whId) = do
+      maxSize <- asks sizeDrone
+      occupiedSpace <- gets drones >>= prodsToWeight . fromJust . Map.lookup dId
+      let freeSpace = maxSize - occupiedSpace
+      let f wh = return $ case Map.lookup prodId (wProducts wh) of
+            Nothing -> 0
+            Just i  -> i
+      numInWh <- gets warehouses >>= f . fromJust . Map.lookup whId
+      let numPossible = min (freeSpace `div` prodWeight) numInWh
+          numProds = min (acc `div` prodWeight) numPossible
+      if numProds <= 0
+        then return (0, ls)
+        else do
+        updateDrone dId prodId numProds
+        updateWareHouse whId prodId numProds
+        let newCmd = DroneCommand dId $ Load whId prodId numProds
+        success <- runCmd newCmd
+        return (acc - prodWeight*numProds, newCmd:ls)
+
+loadForLoc :: OrderId -> (ProdId, Int) -> Simulation [DroneCommand]
 loadForLoc _   (_, 0) = return []
-loadForLoc loc (prodId, n) = do
+loadForLoc oId (prodId, n) = do
+   loc <- (oLocation . fromJust . Map.lookup oId) <$> gets orders
    prodWeight <- asks (fromJust . Map.lookup prodId . products)
    droneFreeSpaces <- getDroneSpace
    let totalWeight = prodWeight*n
@@ -97,17 +143,6 @@ loadForLoc loc (prodId, n) = do
        let (_, dnos) = foldl (getDroneDistrib prodWeight) (totalWeight, []) droneFreeSpaces in
        fmap concat $ mapM loadDrone $ filter ((> 0) . snd) dnos
   where
-    loadDrone :: (DroneId, Int) -> Simulation [DroneCommand]
-    loadDrone (dId, numProds) = do
-      updateDrone dId prodId numProds
-      whIds <- getWareHouses loc prodId
-      let (_, whs) = foldl getWHDistrib (numProds, []) whIds
-      mapM (loadDroneFromWh dId) whs
-    loadDroneFromWh dId (whId, numProds) = do
-       updateWareHouse whId prodId numProds
-       let newCmd = DroneCommand dId $ Load whId prodId numProds
-       success <- runCmd newCmd
-       return newCmd
     getDroneDistrib prodWeight (acc, ls) (dId, freeSpace) =
       if acc <= 0
       then (acc, ls)
@@ -118,6 +153,18 @@ loadForLoc loc (prodId, n) = do
       if acc <= 0
       then (acc, ls)
       else (acc - min acc numLeft, (whId, min acc numLeft):ls)
+    loadDrone (dId, numProds) = do
+      dLoc <- dLocation . fromJust . Map.lookup dId <$> gets drones
+      updateDrone dId prodId numProds
+      loc <- (oLocation . fromJust . Map.lookup oId) <$> gets orders
+      whIds <- getWareHouses loc dLoc prodId
+      let (_, whs) = foldl getWHDistrib (numProds, []) whIds
+      mapM (loadDroneFromWh dId) whs
+    loadDroneFromWh dId (whId, numProds) = do
+       updateWareHouse whId prodId numProds
+       let newCmd = DroneCommand dId $ Load whId prodId numProds
+       success <- runCmd newCmd
+       return newCmd
    -- here one might consider not greedily loading every done full
    -- for example if we want to use Unload
    -- also we could find the warehouse and drone at the same time
@@ -129,14 +176,14 @@ deliver oid (dId, d) = do
   clearDrones
 
 handleOrder :: (OrderId, Order) -> Simulation ()
-handleOrder (oid, o) = do
+handleOrder (oId, o) = do
   let oLoc = oLocation o
-  lCmds <- mapM (loadForLoc oLoc) $ Map.toList $ oProducts o
-  dCmds <- get >>= mapM (deliver oid) . Map.toList . drones
+  lCmds <- mapM (loadForLoc oId) $ Map.toList $ oProducts o
+  dCmds <- get >>= mapM (deliver oId) . Map.toList . drones
   return ()
 
 releaseTheDrones :: Simulation ()
-releaseTheDrones = gets orders >>= mapM_ handleOrder . Map.toList
+releaseTheDrones = gets orders >>= mapM_ handleOrder . sortOn (oTotalNum . snd) . Map.toList
 
 
 --MAIN

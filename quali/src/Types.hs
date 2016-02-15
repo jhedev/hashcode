@@ -35,6 +35,7 @@ data WareHouse = WareHouse
 
 data Order = Order
   { oLocation :: Location
+  , oTotalNum :: Int
   , oProducts :: Map Int Int
   } deriving Show
 

@@ -22,7 +22,7 @@ parseOrders [] = []
 parseOrders (l1:l2:l3:ls) = parseOrder l1 l2 l3 : parseOrders ls
 
 parseOrder :: String -> String -> String -> Order
-parseOrder loc noProds prodTypes = Order (read x, read y) prodmap
+parseOrder loc noProds prodTypes = Order (read x, read y) (read noProds) prodmap
   where
     [x,y] = words loc
     prodmap = foldl updateMap Map.empty $ map read (words prodTypes)
