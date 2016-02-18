@@ -8,12 +8,23 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe
 
-type DroneId = Int
-type WareHouseId = Int
-type ProdId = Int
-type OrderId = Int
+newtype DroneId = DroneId Int deriving (Eq, Ord)
+instance Show DroneId where
+  show (DroneId i) = show i
+newtype WarehouseId = WarehouseId Int deriving (Eq, Ord)
+instance Show WarehouseId where
+  show (WarehouseId i) = show i
+newtype ProdId = ProdId Int deriving (Eq, Ord)
+instance Show ProdId where
+  show (ProdId i) = show i
+newtype OrderId = OrderId Int deriving (Eq, Ord)
+instance Show OrderId where
+  show (OrderId i) = show i
 
 type Weight = Int
+--newtype Weight = Weight Int deriving (Eq, Ord)
+--instance Show Weight where
+--show (Weight i) = show i
 
 type Location = (Int, Int)
 
@@ -28,19 +39,19 @@ data Drone = Drone
   , dProducts :: Map ProdId Int
   } deriving Show
 
-data WareHouse = WareHouse
+data Warehouse = Warehouse
   { wLocation :: Location
-  , wProducts :: Map Int Int
+  , wProducts :: Map ProdId Int
   } deriving Show
 
 data Order = Order
   { oLocation :: Location
   , oTotalNum :: Int
-  , oProducts :: Map Int Int
+  , oProducts :: Map ProdId Int
   } deriving Show
 
-data DroneCommand' = Load WareHouseId ProdId Int
-                  | Unload WareHouseId ProdId Int
+data DroneCommand' = Load WarehouseId ProdId Int
+                  | Unload WarehouseId ProdId Int
                   | Deliver OrderId ProdId Int
                   | Wait Int
 
@@ -65,11 +76,17 @@ data SimConfig = SimConfig
    } deriving Show
 
 data SimState = SimState
-  { warehouses :: Map WareHouseId WareHouse
+  { warehouses :: Map WarehouseId Warehouse
   , orders :: Map OrderId Order
   , drones :: Map DroneId Drone
   } deriving Show
 
+getDrone :: DroneId -> Simulation Drone
+getDrone i = fromJust . Map.lookup i <$> gets drones
+getWh :: WarehouseId -> Simulation Warehouse
+getWh i = fromJust . Map.lookup i <$> gets warehouses
+getOrder :: OrderId -> Simulation Order
+getOrder i = fromJust . Map.lookup i <$> gets orders
 type Simulation = RWS SimConfig [DroneCommand] SimState
 
 cmdTime :: DroneCommand -> Simulation (DroneId, Location, Int)
@@ -78,13 +95,13 @@ cmdTime (DroneCommand dId cmd) = do
   let currentTime = dTurnFree drone
   case cmd of
     (Load wId _ _) -> do
-      wLoc <- wLocation . fromJust . Map.lookup wId <$> gets warehouses
+      wLoc <- wLocation <$> getWh wId
       return . (dId,wLoc,) $ dist wLoc (dLocation drone) + 1 + currentTime
     (Unload wId _ _) -> do
-      wLoc <- wLocation . fromJust . Map.lookup wId <$> gets warehouses
+      wLoc <- wLocation <$> getWh wId
       return . (dId,wLoc,) $ dist wLoc (dLocation drone) + 1 + currentTime
     (Deliver oId _ _) -> do
-      oLoc <- oLocation . fromJust . Map.lookup oId <$> gets orders
+      oLoc <- oLocation <$> getOrder oId
       return . (dId,oLoc,) $ dist oLoc (dLocation drone) + 1 + currentTime
     (Wait i) -> return (dId, dLocation drone, i + currentTime)
 
@@ -92,7 +109,7 @@ cmdTime (DroneCommand dId cmd) = do
 applyCmd :: DroneCommand -> Simulation Int
 applyCmd newCmd = do
   (dId, newLoc, finishTime) <- cmdTime newCmd
-  drone <- fromJust . Map.lookup dId <$> gets drones
+  drone <- getDrone dId
   let newDrone = Drone newLoc finishTime newCmd (dProducts drone)
       addDrone = Map.insert dId newDrone
   modify (\sim -> sim {drones = addDrone (drones sim)})
