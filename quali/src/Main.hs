@@ -114,7 +114,7 @@ load' oId (prodId, n) = do
    let totalWeight = prodWeight*n
    --traceShow ("Combo: "++show combo) $ return ()
    (numLoaded, load) <- takeFirst prodWeight combos
-   traceShow ("Really loaded: " ++ show numLoaded) $ return ()
+   --traceShow ("Really loaded: " ++ show numLoaded) $ return ()
    loads <- load' oId (prodId, n-numLoaded)
    return $ load:loads
   where
@@ -187,7 +187,12 @@ handleOrder (oId, o) = do
   get >>= mapM_ (deliver oId) . Map.toList . drones
 
 releaseTheDrones :: Simulation ()
-releaseTheDrones = gets orders >>= mapM_ handleOrder . sortOn (oTotalNum . snd) . Map.toList
+releaseTheDrones = gets orders >>= mapM_ handleOrder . sortOn (g . snd) . Map.toList
+  where
+  f = oTotalNum . snd
+  g o = let total = oTotalNum o
+            numTypes = length $ Map.keys $ oProducts o
+        in fromIntegral total * (1.5 ^^ fromIntegral numTypes)
 
 
 --MAIN
