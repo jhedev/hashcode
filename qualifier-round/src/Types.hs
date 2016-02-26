@@ -1,12 +1,10 @@
  {-# LANGUAGE TupleSections #-}
 module Types where
 
-import Debug.Trace
-import Control.Monad.State
-import Control.Monad.RWS
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe
+import Control.Monad.RWS
 
 newtype DroneId = DroneId Int deriving (Eq, Ord)
 instance Show DroneId where
@@ -22,9 +20,6 @@ instance Show OrderId where
   show (OrderId i) = show i
 
 type Weight = Int
---newtype Weight = Weight Int deriving (Eq, Ord)
---instance Show Weight where
---show (Weight i) = show i
 
 type Location = (Int, Int)
 
@@ -87,6 +82,8 @@ getWh :: WarehouseId -> Simulation Warehouse
 getWh i = fromJust . Map.lookup i <$> gets warehouses
 getOrder :: OrderId -> Simulation Order
 getOrder i = fromJust . Map.lookup i <$> gets orders
+getProdWeight :: ProdId -> Simulation Int
+getProdWeight i = fromJust . Map.lookup i <$> asks products
 type Simulation = RWS SimConfig [DroneCommand] SimState
 
 cmdTime :: DroneCommand -> Simulation (DroneId, Location, Int)
